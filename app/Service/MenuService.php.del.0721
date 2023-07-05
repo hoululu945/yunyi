@@ -1,0 +1,189 @@
+<?php
+
+
+namespace App\Service;
+
+
+use App\Model\AuthRole;
+use App\Model\AuthRoleRule;
+use App\Model\AuthRule;
+use App\Model\Department;
+use Hyperf\Di\Annotation\Inject;
+use Hyperf\HttpServer\Contract\RequestInterface;
+
+class MenuService
+{
+
+    /**
+     *
+     * @Inject
+     * @var RequestInterface
+     */
+    private $request;
+
+    public function allRule()
+    {
+        $user_info = $this->request->user_info;
+        if(empty($user_info)){
+            return  [];
+        }
+        $is_admin = $user_info['is_admin'];
+        $where = [];
+        if (empty($is_admin)) {
+            $where['is_open'] = 1;
+        }
+        $data = AuthRule::query()->where($where)->orderBy('parent_id', 'asc')->orderBy('list_order', 'desc')->get();
+        return self::getTree($data, 0, 2);
+
+//        return $menus;
+    }
+    public function allStaff()
+    {
+        $user_info = $this->request->user_info;
+        $company_id = $this->request->switch_company;
+        $where = [];
+        $where['company_id'] = $company_id;
+        $where['status'] = 0;
+        $data = Department::query()->where($where)->orderBy('parent_id', 'asc')->orderBy('sort', 'desc')->get();
+        return self::getTree($data, 0, 2);
+
+//        return $menus;
+    }
+
+    public function allRoleRule($role_id_arr)
+    {
+//        $rule = AuthRoleRule::where(['role_id' => $id])->pluck('rule_id')->toArray();
+
+        $rules = AuthRoleRule::query()->whereIn('role_id', $role_id_arr)->pluck("rule_id");
+//        var_dump($rules);
+//        $rules = array_unique($rules);
+        return $rules;
+    }
+
+    public function editRoleRule($data = [])
+    {
+//        $rule = AuthRoleRule::where(['role_id' => $id])->pluck('rule_id')->toArray();
+//        $data['role_id'] = 9988;
+//        $data['rule_ids'] = [123,22,11];
+        if (isset($data['role_id'])) {
+            AuthRoleRule::query()->where(['role_id' => $data['role_id']])->delete();
+            if (isset($data['rule_ids'])) {
+                foreach ($data['rule_ids'] as $val) {
+                    $tmp = array(
+                        'role_id' => $data['role_id'],
+                        'rule_id' => $val
+                    );
+                    AuthRoleRule::query()->insert($tmp);
+                }
+            }
+        }
+        $rules = AuthRoleRule::query()->where('role_id', $data['role_id'])->pluck("rule_id");
+        return $rules;
+    }
+
+    function addMenu($data)
+    {
+        $result = AuthRule::query()->insert($data);
+        return $result;
+    }
+
+    function editMenu($id, $data)
+    {
+        unset($data['id']);
+        $is_exits = AuthRule::query()->where(['id' => $id])->first();
+        if ($is_exits) {
+            AuthRule::query()->where('id', $id)->update($data);
+            return true;
+        } else {
+            return false;
+        }
+
+
+    }
+
+    function addDepartment($data)
+    {
+        $result = Department::query()->insert($data);
+        return $result;
+    }
+
+    function editDepartment($id, $data)
+    {
+        unset($data['id']);
+        $is_exits = Department::query()->where(['id' => $id])->first();
+        if ($is_exits) {
+
+            $res = Department::where('id', $id)->update($data);
+
+            return true;
+        } else {
+            return false;
+        }
+
+
+    }
+
+
+    function getMainMenu($role_id)
+    {
+        $rule_ids = AuthRoleRule::query()->where('role_id', $role_id)->pluck('rule_id');
+        $rule_list = AuthRule::query()->select('id', 'name as viewUrl')->get();
+        foreach ($rule_list as $key => $val) {
+            if (in_array($val['id'], $rule_ids)) {
+                $rule_list[$key]['hasRight'] = true;
+            } else {
+                $rule_list[$key]['hasRight'] = false;
+            }
+        }
+    }
+
+    /**
+     * $type:1-导航;2-菜单及权限
+     */
+    protected static function getTree($data, $pId, $type)
+    {
+        $tree = array();
+        foreach ($data as $k => $v) {
+            if ($v['parent_id'] == $pId) {
+                if ($type == 1) {
+                    $child = self::getTree($data, $v['id'], $type);
+                    $v['child'] = $child;
+//                    if ($v['status'] == 0 || $v['type'] == 0) {
+//                        continue;
+//                    }
+//                    $child = self::getTree($data, $v['id'], $type);
+//                    if (empty($child)) {
+//                        $v["url"] = "";
+//                        if (!empty($v['name'])) {
+//                            if (!empty($v["param"])) {
+//                                try {
+//                                    $url = route($v["name"], $v["param"]);
+//                                } catch (\Exception $e) {
+//                                    $url = "";
+//                                }
+//                            } else {
+//                                try {
+//                                    $url = route($v["name"]);
+//                                } catch (\Exception $e) {
+//                                    $url = "";
+//                                }
+//                            }
+//                            $v["url"] = $url;
+//                        }
+//
+//                    } else {
+//                        $v['url'] = '';
+//                    }
+//                    $v['child'] = $child;
+                } else {
+                    $child = self::getTree($data, $v['id'], $type);
+                    $v['child'] = $child;
+                }
+                $tree[] = $v;
+            }
+        }
+        return $tree;
+    }
+
+
+}

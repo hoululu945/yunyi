@@ -1,0 +1,566 @@
+<?php
+
+
+namespace App\Controller;
+
+
+use App\Common\Controller\BaseController;
+
+use _HumbugBox39a196d4601e\Nette\Neon\Exception;
+use App\Common\Tool\ExcelBom;
+use App\Common\Tool\HyberfRedis;
+use App\Common\Tool\ImgeDown;
+use App\Common\Tool\JwtTool;
+use App\Common\Tool\RedisUtil;
+use App\Model\AuthRole;
+use App\Model\AuthRoleRelate;
+use App\Model\AuthRoleRule;
+use App\Model\AuthRule;
+use App\Model\BandDui;
+use App\Model\BandRecord;
+use App\Model\CompanyUserRelate;
+use App\Model\DesignWriteDetail;
+use App\Model\OrderDetail;
+use App\Model\PlatemakingWriteDetail;
+use App\Model\StyleParam;
+use App\Model\User;
+use App\Model\UserCompany;
+use App\Model\UserInfo;
+use App\Model\UserOrder;
+use App\Model\UserOrderDiscuss;
+use App\Model\UserOrderFile;
+use App\Model\UserOrderGroup;
+use App\Model\UserOrderInfo;
+use App\Model\UserOrderTalk;
+use App\Service\UserAuthService;
+use Hyperf\DbConnection\Db;
+use Hyperf\HttpServer\Annotation\AutoController;
+use Hyperf\Di\Annotation\Inject;
+use Hyperf\HttpServer\Contract\RequestInterface;
+use Hyperf\HttpServer\Contract\ResponseInterface;
+use App\Service\MenuService;
+use Hyperf\Config\Config;
+use Hyperf\HttpServer\Annotation\Middleware;
+use Hyperf\HttpServer\Annotation\Middlewares;
+use App\Middleware\Auth\CheckToken;
+use App\Service\RoleService;
+
+
+//
+
+/**
+ * Class MenuController
+ * @package App\Controller
+ * @AutoController(prefix="/api/wechat")
+ */
+class WechatLoginController extends BaseController
+{
+    private $appid;
+    private $secret;
+    /**
+     * @Inject
+     * @var RoleService
+     */
+    protected $roleService;
+
+    /**
+     * @Inject
+     * @var ResponseInterface
+     */
+    protected $response;
+
+    function __construct()
+    {
+
+        parent::__construct($this->response);
+        $this->appid = config('WX_APPID');
+        $this->secret = config('WX_SECRET');
+
+
+    }
+    use JwtTool;
+//    function curPageURL() {
+//        $pageURL = 'http';
+//        if (!empty($_SERVER['HTTPS'])) {
+//            $pageURL .= "s";
+//        }
+//        $pageURL .= "://";
+//        if (strpos($_SERVER["SERVER_NAME"],'localhost') !== false) {
+//            $_SERVER["SERVER_NAME"] = 'wechat.lvtudiandian.com';
+//        }
+//        if ($_SERVER["SERVER_PORT"] != "80") {
+//            $pageURL .= $_SERVER["SERVER_NAME"].":".$_SERVER["SERVER_PORT"].$_SERVER["REQUEST_URI"];
+//        } else {
+//            $pageURL .= $_SERVER["SERVER_NAME"].$_SERVER["REQUEST_URI"];
+//        }
+//        return $pageURL;
+//    }
+    function https_request($url, $data = null)
+    {
+        $curl = curl_init();
+        //$header = "Accept-Charset: utf-8";
+        curl_setopt($curl, CURLOPT_URL, $url);
+        curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, FALSE);
+        curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, FALSE);
+        //curl_setopt($curl, CURLOPT_SSLVERSION, 3);
+        //curl_setopt($curl, CURLOPT_HTTPHEADER, $header);
+        if (!empty($data)) {
+            curl_setopt($curl, CURLOPT_POST, 1);
+            curl_setopt($curl, CURLOPT_POSTFIELDS, $data);
+        }
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+        $output = curl_exec($curl);
+        curl_close($curl);
+        return json_decode($output, true);
+    }
+
+    public function get_online_token()
+    {
+        $redis = RedisUtil::getInstance();
+        $appId = $this->appid;
+        $appSecret = $this->secret;
+        $token_name = 'accessToken';
+        $url = "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=" . $appId . "&secret=" . $appSecret;
+        $ch = curl_init();//初始化curl
+        curl_setopt($ch, CURLOPT_URL, $url); //要访问的地址
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);//跳过证书验证
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false); // 从证书中检查SSL加密算法是否存在
+        $data = json_decode(curl_exec($ch), true);
+//        $redis = new \RedisUtil();
+        $accessToken = $redis->setKeys($token_name, $data['access_token'], 2 * 60 * 60);
+//        $redis->closeRedis();
+        return $data['access_token'];
+
+    }
+
+
+    function token()
+    {
+        return $this->success('123123');
+//        header("Content-type: text/html; charset=utf-8");
+//
+//        //1.将timestamp,nonce,toke按字典顺序排序
+//        $timestamp = $param['timestamp'];
+//        $nonce = $param['nonce'];
+//        $token = 'bantubento';
+//        $signature = $param['signature'];
+//        $array = array($timestamp,$nonce,$token);
+//        //2.将排序后的三个参数拼接之后用sha1加密
+//        $tmpstr = implode('',$array);
+//        $tmpstr = sha1($tmpstr);
+//        //3.将加密后的字符串与signature进行对比，判断该请求是否来自微信
+//        if($tmpstr == $signature){
+//            return $param['echostr'];
+//
+//        }
+    }
+
+    function vaild()
+    {
+        header("Content-type: text/html; charset=utf-8");
+
+        //1.将timestamp,nonce,toke按字典顺序排序
+        $param = $this->request->all();
+        $timestamp = $param['timestamp'];
+        $nonce = $param['nonce'];
+        $token = 'bantubento';
+        $signature = $param['signature'];
+        $array = array($timestamp, $nonce, $token);
+        //2.将排序后的三个参数拼接之后用sha1加密
+        $tmpstr = implode('', $array);
+        $tmpstr = sha1($tmpstr);
+        //3.将加密后的字符串与signature进行对比，判断该请求是否来自微信
+        if ($tmpstr == $signature) {
+            return $param['echostr'];
+
+        }
+        return $param['echostr'];
+    }
+
+    function index()
+    {
+//        return $this->success('hhhhhhhhh');
+//        echo 222222222;
+        $urlData = $this->request->all();
+        echo $urlData['company_id'] . '**********';
+        $urlData['user_id'] = empty($urlData['user_id']) ? 14 : $urlData['user_id'];
+        $urlData['company_id'] = empty($urlData['company_id']) ? 21 : $urlData['company_id'];
+        try {
+
+
+            if (empty($urlData['user_id']) || empty($urlData['company_id'])) {
+//                return $this->error('参数缺失');
+                throw new Exception('参数缺失');
+            }
+
+//        $redirect_uri = 'http://39.101.193.254:9500/api/wechat/index';
+            $redirect_uri = \config('domain_url') . 'api/wechat/index?user_id=' . $urlData['user_id'] . '&company_id=' . $urlData['company_id'];
+            $redirect_uri = urlencode($redirect_uri);
+            if (!isset($urlData["code"]) || empty($urlData["code"])) {
+
+//            return $this->response->redirect($redirect_uri);
+
+                echo $authUrl = sprintf("https://open.weixin.qq.com/connect/oauth2/authorize?appid=%s&redirect_uri=%s&response_type=code&scope=snsapi_userinfo&state=STATE#wechat_redirect", $this->appid, $redirect_uri);
+                return $this->response->redirect($authUrl);
+
+            }
+            $code = $urlData["code"];
+            $get_token_url = sprintf("https://api.weixin.qq.com/sns/oauth2/access_token?appid=%s&secret=%s&code=%s&grant_type=authorization_code", $this->appid, $this->secret, $code);
+            $json_obj = $this->https_request($get_token_url);
+            if (!empty($json_obj['errcode'])) {
+                throw new Exception('换取token失败');
+            }
+            echo $openid = $json_obj["openid"];
+            $info_memb = User::where((["wx_openid" => $openid]))->first();
+//            var_dump($info_memb);
+            if (!empty($info_memb)) {
+                $info_memb = $info_memb->toArray();
+//                $wx_user_id = $info_memb->id;
+//               $wx_invite_info =  CompanyUserRelate::where(['company_id'=>$urlData['company_id'],'user_id'=>$wx_user_id])->first();
+//               if(!empty($wx_invite_info)){
+//                   throw new Exception('该用户已被邀请');
+//
+//               }
+//                throw new Exception('该用户已是登录用户');
+
+//                return $this->error('该用户已是登录用户');
+            }
+            $unionid = empty($json_obj['unionid']) ? "" : $json_obj['unionid'];
+            if (!empty($unionid)) {
+                $info_memb_union = User::where(["wx_unionid" => $unionid])->first();
+
+            }
+            if (!empty($info_memb['phone']) || !empty($info_memb_union->phone)) {
+//                throw new Exception('不可邀请');
+
+//                return $this->error('不可邀请');
+            }
+            $token = $this->get_online_token();
+
+            $wx_info_user = $this->getWxUserInfo($token, $openid);
+            var_dump($wx_info_user);
+            if ($wx_info_user["subscribe"] == 1) {
+                $nickname = $wx_info_user["nickname"];
+                $headimgurl = $wx_info_user["headimgurl"];
+                $info_sex = $wx_info_user["sex"];
+            }
+
+            $data_memb = array(
+                "nickName" => empty($nickname) ? '未获取到' : $nickname,
+                "wx_openid" => $openid,
+                "avatar" => empty($wx_info_user["headimgurl"]) ? '' : $wx_info_user["headimgurl"],
+                "wx_unionid" => $unionid
+
+            );
+            $memberId = "";
+//            try {
+            if (empty($info_memb)) {
+                if (empty($info_memb_union)) {
+
+
+                    $memberId = User::insertGetId($data_memb);
+
+
+                } else {
+                    $memberId = $user_id = $info_memb_union->id;
+                    User::where('id', $user_id)->update($data_memb);
+                }
+            } else {
+                $memberId = $user_id = $info_memb['id'];
+                User::where('id', $user_id)->update($data_memb);
+
+
+            }
+            if (empty($info_memb)) {
+                $user_company0['company_id'] = 0;
+                $user_company0['user_id'] = $memberId;
+//        $user_company['invite_code'] = $this->getCode($param['company_id'],$user_info['id']);
+
+                $user_company0['company_name'] = '云衣公设';
+                $user_company0['creation_time'] = date("Y-m-d H:i:s");
+                $user_company0['isAdministrator'] = 0;
+//                    $user_company0['type'] = 1;
+//        $user_company['is_profession'] = 1;
+                $user_company0['user_name'] = "";
+                $user_company0['switch'] = 1;
+                $user_company0['status'] = 0;
+
+                $rid = CompanyUserRelate::query()->insertGetId($user_company0);
+//                $role_id = config('limit_design_role');
+                $yu_role = AuthRole::where(['type' => 1, 'position_type' => 1])->value('id');
+                $role_id = empty($yu_role) ? config('limit_design_role') : $yu_role;
+                AuthRoleRelate::insertGetId(['role_id' => $role_id, 'relate_id' => $rid]);
+            }
+            if (!empty($info_memb)) {
+                var_dump($info_memb);
+                $company_id = CompanyUserRelate::where(['user_id' => $info_memb['id']])->pluck('company_id')->toArray();
+                var_dump($company_id);
+                echo $urlData['company_id'];
+                if (in_array($urlData['company_id'], $company_id)) {
+                    throw new Exception('不可重加入同一个公司');
+                }
+            }
+            $user_company['company_id'] = $urlData['company_id'];
+            $user_company['user_id'] = $memberId;
+            $user_company['form_user_id'] = $urlData['user_id'];
+            $user_company['company_name'] = UserCompany::where('id', $urlData['company_id'])->value('company_name');
+            $user_company['status'] = 0;
+            $user_company['creation_time'] = date("Y-m-d H:i:s");
+            $user_company['isAdministrator'] = 0;
+//                $user_company['type'] = 1;
+            $user_company['user_name'] = "";
+
+            CompanyUserRelate::query()->insertGetId($user_company);
+//            } catch (\Exception $e) {
+//
+//
+//                $this->error($e->getMessage());
+//            }
+        } catch (\Exception $e) {
+            echo $e->getMessage();
+//            return $this->error($e->getMessage());
+            echo \config('domain_url') . 'invite';
+            return $this->response->redirect(\config('domain_url') . 'invite');
+
+        }
+        return $this->response->redirect(\config('domain_url') . 'invite');
+//        return $this->success();
+
+
+    }
+
+
+    function login(RequestInterface $request, ResponseInterface $response)
+    {
+
+        $urlData = $this->request->all();
+        if(empty($urlData['fdId'])){
+            return $this->error('参数缺失');
+        }
+        try {
+            $redirect_uri = \config('domain_url') . 'api/wechat/login?fdId='.$urlData['fdId'];
+            $redirect_uri = urlencode($redirect_uri);
+            if (!isset($urlData["code"]) || empty($urlData["code"])) {
+                $authUrl = sprintf("https://open.weixin.qq.com/connect/oauth2/authorize?appid=%s&redirect_uri=%s&response_type=code&scope=snsapi_userinfo&state=STATE#wechat_redirect", $this->appid, $redirect_uri);
+                return $this->response->redirect($authUrl);
+
+            }
+            $code = $urlData["code"];
+            $get_token_url = sprintf("https://api.weixin.qq.com/sns/oauth2/access_token?appid=%s&secret=%s&code=%s&grant_type=authorization_code", $this->appid, $this->secret, $code);
+            $json_obj = $this->https_request($get_token_url);
+            if (!empty($json_obj['errcode'])) {
+                throw new Exception('换取token失败');
+            }
+            $openid = $json_obj["openid"];
+            $info_memb = User::where((["wx_openid" => $openid]))->first();
+//            var_dump($info_memb);
+            if (!empty($info_memb)) {
+                $info_memb = $info_memb->toArray();
+            }
+            $unionid = empty($json_obj['unionid']) ? "" : $json_obj['unionid'];
+            if (!empty($unionid)) {
+                $info_memb_union = User::where(["wx_unionid" => $unionid])->first();
+
+            }
+            $token = $this->get_online_token();
+
+            $wx_info_user = $this->getWxUserInfo($token, $openid);
+            if ($wx_info_user["subscribe"] == 1) {
+                $nickname = $wx_info_user["nickname"];
+                $headimgurl = $wx_info_user["headimgurl"];
+                $info_sex = $wx_info_user["sex"];
+            }
+
+            $data_memb = array(
+                "nickName" => empty($nickname) ? '未获取到' : $nickname,
+                "wx_openid" => $openid,
+                "avatar" => empty($wx_info_user["headimgurl"]) ? '' : $wx_info_user["headimgurl"],
+                "wx_unionid" => $unionid
+
+            );
+            $memberId = "";
+//            try {
+            if (empty($info_memb)) {
+                if (empty($info_memb_union)) {
+
+
+                    $memberId = User::insertGetId($data_memb);
+
+
+                } else {
+                    $memberId = $user_id = $info_memb_union->id;
+                    User::where('id', $user_id)->update($data_memb);
+                }
+            } else {
+                $memberId = $user_id = $info_memb['id'];
+                User::where('id', $user_id)->update($data_memb);
+
+
+            }
+            if (empty($info_memb)) {
+                $user_company0['company_id'] = 0;
+                $user_company0['user_id'] = $memberId;
+//        $user_company['invite_code'] = $this->getCode($param['company_id'],$user_info['id']);
+
+                $user_company0['company_name'] = '云衣公设';
+                $user_company0['creation_time'] = date("Y-m-d H:i:s");
+                $user_company0['isAdministrator'] = 0;
+//                    $user_company0['type'] = 1;
+//        $user_company['is_profession'] = 1;
+                $user_company0['user_name'] = "";
+                $user_company0['switch'] = 1;
+                $user_company0['status'] = 1;
+
+                $rid = CompanyUserRelate::query()->insertGetId($user_company0);
+                $yu_role = AuthRole::where(['type' => 1, 'position_type' => 1])->value('id');
+                $role_id = empty($yu_role) ? config('limit_design_role') : $yu_role;
+                AuthRoleRelate::insertGetId(['role_id' => $role_id, 'relate_id' => $rid]);
+            }
+
+
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+        if(empty($info_memb)){
+            $info_memb = User::where('id',$memberId)->first()->toArray();
+        }
+        $user =$info_memb;
+        $userInfo['last_login_date'] = date("Y-m-d H:i:s");
+        $userInfo['last_login_ip'] = '127.0.0.1';
+        $userInfo['user_id'] = $user['id'];
+        $userBaseInfo = UserInfo::query()->where('user_id', $user['id'])->first();
+
+        if (empty($userBaseInfo)) {
+            UserInfo::query()->insert($userInfo);
+
+        } else {
+            $userBaseInfo = $userBaseInfo->toArray();
+            $info = array_merge($userBaseInfo, $userInfo);
+            $userInfo['user_id'];
+            $result = UserInfo::query()->where('user_id', $userInfo['user_id'])->update($info);
+
+        }
+//                $all_rule = $this->menuService->allRule();
+//                var_dump($all_rule);
+//                $this->redis->setKeys('all_auth', $all_rule);
+//        $nickname = $us
+        $token_arr = self::refreshGetToken($info_memb);
+        $redis = RedisUtil::getInstance();
+        $r = $redis->hashSet('access_token', strval($user['id']), $token_arr['access_token']);
+        $rule_res = $this->roleService->getRoleRuleName($user['id'],0);
+        $redis = RedisUtil::getInstance();
+        $redis->setKeyt('code_login_fdId_'.$urlData['fdId'],serialize($token_arr),3600*24);
+        /**
+         * 跳转微信登录完成页面
+         */
+        return $response->json(['code' => 200, 'message' => '登陆成功', 'data' => $token_arr]);
+//        return $this->success();
+
+
+    }
+
+
+    public function minLogin()
+    {
+
+        $url = "https://api.weixin.qq.com/sns/jscode2session";
+        // 参数
+        $params['appid'] = 'wxe7409e2523af6c1d';
+        $params['secret'] = 'b38a1e5fdcd6063efd5b2fcdd95daab3';
+        $params['js_code'] = I('post.code');
+        $params['grant_type'] = 'authorization_code';
+//        $user_phone= I('user_phone');
+        // 微信API返回的session_key 和 openid
+        $arr = httpCurl($url, $params, 'POST');
+        $arr = json_decode($arr, true);
+        file_put_contents('/hl/mincode.txt', print_r($params, true), FILE_APPEND);
+        file_put_contents('/hl/mincode.txt', print_r($arr, true), FILE_APPEND);
+        // 判断是否成功
+        if (isset($arr['errcode']) && !empty($arr['errcode'])) {
+            //return  22222;
+            $b = ['code' => '2', 'message' => $arr['errmsg'], "result" => null];
+            file_put_contents('/hl/mincode.txt', $b, FILE_APPEND);
+            echo json_encode(['code' => '2', 'message' => $arr['errmsg'], "result" => null]);
+            exit;
+        }
+        //$openid = $arr['openid'];
+        //$session_key = $arr['session_key'];
+//        if(!empty($arr['unionid'])){
+//             return json(['sendsure'=>'1','message'=>'登录成功',$arr]);
+//
+//        }else{
+//             return json(['sendsure'=>'0','message'=>'登录失败']);
+//
+//        }
+        //$unionid = $arr['unionid'];
+        //$unionid_key =$unionid.'minopenid';
+        //$redis = new \RedisUtil();
+        //getSetReidsStr($redis,$unionid_key,$openid);
+        if (!empty($arr['unionid'])) {
+            $a = json_encode(['sendsure' => '1', 'message' => '登录成功', $arr]);
+            file_put_contents('/hl/mincode.txt', $a, FILE_APPEND);
+            echo json_encode(['sendsure' => '1', 'message' => '登录成功', "data" => $arr]);
+            exit;
+
+        } else {
+            echo json_encode(['sendsure' => '0', 'message' => '登录失败']);
+            exit;
+
+        }
+        // 从数据库中查找是否有该openid
+        // $is_openid = M('k_member')->where('mincode_openid',$openid)->find();
+        // 如果openid存在，更新openid_time,返回登录成功信息及手机号
+        //    if($is_openid){
+        // openid存在，先判断openid_time,与现在的时间戳相比，如果相差大于4个小时，则则返回登录失败信息，使客户端跳转登录页，如果相差在四个小时之内，则更新openid_time，然后返回登录成功信息及手机号；
+        // 根据openid查询到所在条数据
+//            $data = M('k_member')->where('mincode_openid',$openid)->find();
+//           if(!empty($data)){
+//                return json(['sendsure'=>'1','message'=>'登录成功','user_phone' => $data['user_phone']]);
+//           }else{
+//                return json(['sendsure'=>'0','message'=>'登录失败']);
+//           }
+        // 计算openid_time与现在时间的差值
+//            $time = time() - $data['openid_time'];
+//            $time = $time / 3600;
+//            // 如果四个小时没更新过，则登陆态消失，返回失败，重新登录
+//            if($time > 4){
+//                return json(['sendsure'=>'0','message'=>'登录失败',]);
+//            }else{
+//                // 根据手机号更新openid时间
+//                $update = M('k_member')->where('mincode_openid', $openid)->update(['minopenid_time' => time()]);
+//                // 判断是否更新成功
+//                if($update){
+//                    return json(['sendsure'=>'1','message'=>'登录成功','user_phone' => $data['user_phone']]);
+//                }else{
+//                    return json(['sendsure'=>'0','message'=>'登录失败']);
+//                }
+//            }
+        // openid不存在时
+//        }else{
+//
+//
+////            if(isset($user_phone) && !empty($user_phone)){
+////                $update = M('k_member')
+////                    ->where('member_phone', $user_phone)
+////                    ->save([
+////                        'mincode_openid'  => $openid,
+////                        'minopenid_time' => time(),
+////                    ]);
+////                if($update){
+////                    return json(['sendsure'=>'1','message'=>'登录成功',]);
+////                }
+////            }else{
+////                return json(['sendsure'=>'0','message'=>'读取失败',]);
+////            }
+//        }
+    }
+
+
+    function getWxUserInfo($token, $openid)
+    {
+        $url = sprintf("https://api.weixin.qq.com/cgi-bin/user/info?access_token=%s&openid=%s", $token, $openid);
+        $info = $this->https_request($url);
+        return $info;
+    }
+}

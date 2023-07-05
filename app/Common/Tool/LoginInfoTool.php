@@ -1,0 +1,193 @@
+<?php
+
+
+namespace App\Common\Tool;
+
+use Hyperf\Di\Annotation\Inject;
+use Hyperf\HttpServer\Contract\RequestInterface;
+class LoginInfoTool
+{
+
+
+    /**
+     * @Inject
+     * @var RequestInterface
+     */
+    protected $request;
+
+
+    public function getIp()
+
+    {
+        echo "*&^%$#";
+        var_dump($_SERVER);
+        $ip = false;
+
+        if (!empty($_SERVER["HTTP_CLIENT_IP"])) {
+            $ip = $_SERVER["HTTP_CLIENT_IP"];
+
+        }
+
+        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $ips = explode(", ", $_SERVER['HTTP_X_FORWARDED_FOR']);
+
+            if ($ip) {
+                array_unshift($ips, $ip);
+                $ip = FALSE;
+            }
+
+            for ($i = 0; $i < count($ips); $i++) {
+                if (!eregi("^(10│172.16│192.168).", $ips[$i])) {
+                    $ip = $ips[$i];
+
+                    break;
+
+                }
+
+            }
+            return ($ip ? $ip : $_SERVER['REMOTE_ADDR']);
+
+        }
+    }
+
+    public function findCityByIp($ip)
+    {
+        $data = file_get_contents('http://ip.taobao.com/service/getIpInfo.php?ip=' . $ip);
+
+        return json_decode($data, $assoc = true);
+
+    }
+
+    public function getBrowser()
+    {
+
+        $agent = $this->request->getHeader('User-Agent');
+//        var_dump($s);
+        $agent = empty($agent)?'unknow':$agent[0];
+
+        if (strpos($agent, 'MSIE') !== false || strpos($agent, 'rv:11.0')) //ie11判断
+
+            return "ie";
+
+        else if (strpos($agent, 'Firefox') !== false)
+
+            return "firefox";
+
+        else if (strpos($agent, 'Chrome') !== false)
+
+            return "chrome";
+
+        else if (strpos($agent, 'Opera') !== false)
+
+            return 'opera';
+
+        else if ((strpos($agent, 'Chrome') == false) && strpos($agent, 'Safari') !== false)
+
+            return 'safari';
+
+        else
+
+            return 'unknown';
+
+    }
+
+    public function getFromPage()
+    {
+        return $_SERVER['HTTP_REFERER'];
+
+    }
+
+
+    function os(){
+        $os = $this->request->header('User-Agent');
+
+        if(empty($os)){
+
+            return "Unknow OS";
+        }
+        if(preg_match('/NT\s5\.1/', $os)){
+            $os = "Windows XP";
+        }
+        elseif (preg_match('/NT\s6\.0/', $os)){
+            $os = 'Windows Vista \ server 2008';
+        }
+        elseif (preg_match('/NT\s5\.2/', $os)){
+            $os = "Windows Server 2003";
+        }
+        elseif (preg_match('/NT\s5/', $os)){
+            $os = "Windows 2000";
+        }
+        elseif (preg_match('/NT/', $os)){
+            $os = "Windows NT";
+        }
+        elseif (preg_match('/NT\s6\.1/', $os)){
+            $os = "Windows 7";
+        }
+        elseif (preg_match('/Linux/', $os)){
+            $os = "Linux";
+        }
+        elseif (preg_match('/Unix/', $os)){
+            $os = "Unix";
+        }
+        elseif (preg_match('/Mac/', $os)){
+            $os = "Macintosh";
+        }
+        elseif (preg_match('/Postman/', $os)){
+         $os = "PostMan";
+        }
+        elseif (preg_match('/NT\s6\.1/', $os)){
+            $os = "Windows 7";
+        }
+        else{
+            $os = "Unknow OS";
+        }
+        return $os;
+    }
+
+    /**
+     * 获取客户端ip地址
+     * @return mixed
+     */
+    public function ipOlddel()
+    {
+        echo "*&^%$#";
+        var_dump($_SERVER);
+        $headers = $this->request->getHeaders();
+        echo "1*&^%$#1";
+        var_dump($headers);
+        $res = $this->request->getServerParams();
+//        var_dump($res);
+        if (isset($res['http_client_ip'])) {
+            return $res['http_client_ip'];
+        } elseif (isset($res['http_x_real_ip'])) {
+            return $res['http_x_real_ip'];
+        } elseif (isset($res['http_x_forwarded_for'])) {
+            //部分CDN会获取多层代理IP，所以转成数组取第一个值
+            $arr = explode(',', $res['http_x_forwarded_for']);
+            return $arr[0];
+        } else {
+            return $res['remote_addr'];
+        }
+    }
+
+
+    function ip(): string
+    {
+
+//        $headers = $this->request->getServerParams();
+
+        $headers = $this->request->getHeaders();
+
+        if(isset($headers['x-forwarded-for'][0]) && !empty($headers['x-forwarded-for'][0])) {
+            return $headers['x-forwarded-for'][0];
+        } elseif (isset($headers['x-real-ip'][0]) && !empty($headers['x-real-ip'][0])) {
+            return $headers['x-real-ip'][0];
+        }
+
+        $serverParams = $this->request->getServerParams();
+        return $serverParams['remote_addr'] ?? '';
+
+    }
+
+
+}

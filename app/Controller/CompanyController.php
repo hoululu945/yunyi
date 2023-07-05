@@ -1,0 +1,515 @@
+<?php
+
+
+namespace App\Controller;
+
+
+use App\Common\Controller\BaseController;
+use App\Common\Tool\QrCodeProduce;
+use App\Common\Tool\RedisUtil;
+use App\Model\ApplyCompany;
+use App\Model\AuthRole;
+use App\Model\AuthRoleRelate;
+use App\Model\AuthRoleRule;
+use App\Model\CompanyUserRelate;
+use App\Model\Department;
+use App\Model\User;
+use App\Model\UserCompany;
+use App\Service\RoleService;
+use Hyperf\DbConnection\Db;
+use Hyperf\HttpServer\Annotation\AutoController;
+use Hyperf\Di\Annotation\Inject;
+use Hyperf\HttpServer\Contract\RequestInterface;
+use Hyperf\HttpServer\Contract\ResponseInterface;
+use App\Service\MenuService;
+use Hyperf\Config\Config;
+use Hyperf\HttpServer\Annotation\Middleware;
+use Hyperf\HttpServer\Annotation\Middlewares;
+use App\Middleware\Auth\CheckToken;
+
+//use Hyperf\Contract\SessionInterface;
+
+/**
+ * @AutoController(prefix="/api/company")
+ * @Middlewares({
+ *     @Middleware(CheckToken::class)
+ * })
+ */
+class CompanyController extends BaseController
+{
+    use QrCodeProduce;
+
+    /**
+     * @Inject
+     * @var RoleService
+     */
+    protected $roleService;
+
+    function companyList(RequestInterface $request)
+    {
+        $user_info = $request->user_info;
+        $list = [['company_id' => 0, 'company_name' => '云衣公设','switch'=>1]];
+        $company_list = CompanyUserRelate::query()->join('user_company', 'user_company.id', '=', 'company_user_relate.company_id')->select('company_user_relate.company_id', 'user_company.company_name', 'company_user_relate.switch')->where(['user_id' => $user_info['id'], 'company_user_relate.status' => 1])->get();
+        $redis = RedisUtil::getInstance();
+        if (!empty($company_list)) {
+            $companys = $company_list->toArray();
+            foreach ($companys as $k => $val) {
+                if ($val['switch'] == 1) {
+                    $list = [['company_id' => 0, 'company_name' => '云衣公设','switch'=>0]];
+                    $redis->setKeys('switch_company_' . $user_info['id'], $val['company_id']);
+                }
+//               if(empty($val['company_id'])){
+//                   unset($companys[$k]);
+//               }
+            }
+//            $company_list_switch = array_column($companys,'switch');
+
+//            if(in_array(1,$company_list_switch)){
+//                $list = [['company_id' => 0, 'company_name' => '云衣公设','switch'=>0]];
+//            }
+           $list = array_merge($list, $companys);
+        }
+        return $this->success('返回成功', $list);
+    }
+
+//type 0个人1设计师2制版3制样既然创建公司了排除0设计师可以不创建不加入及可下单   -----加入团队也要填写信息  我的菜单个人页面只读不可写
+    function createCompany(RequestInterface $request)
+    {
+        $param = $request->all();
+        $user_info = $request->user_info;
+        $redis = RedisUtil::getInstance();
+        if ($user_info['is_admin'] == 1) {
+            return $this->error('平台管理员不支持创建团队');
+        }
+        $relate = CompanyUserRelate::query()->where('user_id', $user_info['id'])->first();
+        try {
+            $res = $redis->setNxClose('create_company_' . $user_info['id'], 'av', 30);
+            if (!$res) {
+                throw new \Exception('正在创建请稍后等待');
+            }
+            Db::beginTransaction();
+
+            if (empty($relate)) {
+                throw new \Exception('账号信息丢失');
+//                return $this->error('账号信息丢失');
+            }
+            if (empty($param['company_name']) || empty($param['address']) || empty($param['department_id']) || empty($param['position_id'])) {
+//                return $this->error('部门参数缺失');
+                throw new \Exception('参数缺失');
+
+            }
+            $is_exit = UserCompany::query()->where(['company_name' => $param['company_name'], 'status' => 1])->first();
+            if (!empty($is_exit)) {
+                throw new \Exception('该公司已存在,不可重复申请');
+
+//                $this->error('该公司已存在,不可重复申请');
+            }
+
+            $company_data['company_name'] = $param['company_name'];
+            $company_data['address'] = $param['address'];
+            $company_data['creation_time'] = date("Y-m-d H:i:s");
+            $company_data['expire_time'] = date("Y-m-d H:i:s", strtotime("+" . \config('default_company_days') . " day"));
+
+            if (!empty($param['remark'])) {
+                $company_data['remark'] = $param['remark'];
+            }
+
+            $company_id = UserCompany::query()->insertGetId($company_data);
+            $user_company['invite_code'] = $this->getCode($company_id, $user_info['id']);
+            $user_company['company_id'] = $company_id;
+            $user_company['user_id'] = $user_info['id'];
+            if (!empty($param['remark'])) {
+                $user_company['remark'] = $param['remark'];
+
+            }
+//            $user_company['department_id'] = $param['department_id'];
+//            $user_company['department_name'] = $param['department_name'];
+
+//            $user_company['type'] = $param['type'];
+            $user_company['company_name'] = $param['company_name'];
+            $user_company['creation_time'] = date("Y-m-d H:i:s");
+            $user_company['isAdministrator'] = 1;
+            $user_company['user_name'] = $user_info['userName'];
+            $user_company['status'] = 1;
+            $user_company['department_id'] = $param['department_id'];
+//            $user_company['department_name'] = $role_info['name'];
+            $user_company['department_name'] = Department::where('id', $param['department_id'])->value('name');
+            $user_company['position_id'] = $param['position_id'];
+            $user_company['position_name'] = Department::where('id', $param['position_id'])->value('name');
+            $relate_id = CompanyUserRelate::query()->insertGetId($user_company);
+            $company_role = AuthRole::where('is_company_admin', 1)->value('id');
+            if (empty($company_role)) {
+                throw new \Exception('未设置公司管理员角色');
+
+//                return $this->error('未设置公司管理员角色');
+            }
+//        AuthRoleRelate::insertGetId(['relate_id' => $relate_id, 'role_id' => \config('company_admin_role')]);
+            AuthRoleRelate::insertGetId(['relate_id' => $relate_id, 'role_id' => $company_role]);
+            $yushe_role = AuthRole::where(['company_id' => 0, 'type' => 1,'status'=>1])->get()->toArray();
+            if (count($yushe_role) < 1) {
+                throw new \Exception('未设置预设角色');
+            }
+            foreach ($yushe_role as $k => $v) {
+                $company_yurole['name'] = $v['name'];
+                $company_yurole['remark'] = $v['remark'];
+                $company_yurole['company_id'] = $company_id;
+                $company_yurole['create_time'] = date("Y-m-d H:i:s");
+
+                $company_yurole['status'] = $v['status'];
+//                $company_yurole['name'] = $v['name'];
+//                $company_yurole['name'] = $v['name'];
+//                $company_yurole['name'] = $v['name'];
+//                $company_yurole['name'] = $v['name'];
+//                $company_yurole['name'] = $v['name'];
+                $yroleid = AuthRole::insertGetId($company_yurole);
+                $yu_rule = AuthRoleRule::where('role_id', $v['id'])->select('rule_id')->get()->toArray();
+                foreach ($yu_rule as $yk => $yv) {
+                    $yv['role_id'] = $yroleid;
+                    AuthRoleRule::insert($yv);
+                }
+
+            }
+        } catch (\Exception $e) {
+            Db::rollBack();
+            return $this->error($e->getMessage());
+        }
+        Db::commit();
+        $redis->deleteKey('create_company_' . $user_info['id']);
+
+        return $this->success();
+
+//        if(empty($param['']));
+    }
+
+    function joinCompanyList(RequestInterface $request)
+    {
+        $param = $request->all();
+        $user_id = $request->user_info['id'];
+
+        $user_company_id = CompanyUserRelate::query()->where('user_id', $user_id)->pluck('company_id');
+        if (!empty($user_company_id)) {
+            $user_company_id = $user_company_id->toArray();
+            $company_list = UserCompany::query()->whereNotIn('id', $user_company_id)->get();
+
+
+        } else {
+            $company_list = UserCompany::query()->get();
+
+        }
+        if (!empty($company_list)) {
+            $company_list = $company_list->toArray();
+        }
+        return $this->success('请求成功', $company_list);
+
+    }
+
+    function joinCompanyApply(RequestInterface $request)
+    {
+
+        $user_info = $request->user_info;
+        if ($user_info['is_admin'] == 1) {
+            return $this->error('平台管理员不支持加入团队');
+        }
+        $param = $request->all();
+        $relate = CompanyUserRelate::query()->where('user_id', $user_info['id'])->first();
+        if (empty($relate)) {
+            return $this->error('账号信息丢失');
+        }
+//        if (empty($param['company_id']) || empty($param['type']) || !isset($param['is_profession'])) {
+//            return $this->error();
+//        }
+        if (empty($param['company_id'])) {
+            return $this->error();
+        }
+        $company_info = UserCompany::query()->where('id', $param['company_id'])->first();
+        if (empty($company_info)) {
+            return $this->error('申请加入失败');
+        }
+
+
+        $is_relate = CompanyUserRelate::query()->where(['company_id' => $param['company_id'], 'user_id' => $user_info['id']])->first();
+        if (!empty($is_relate)) {
+            return $this->error('不可重复申请');
+        }
+        $user_company['company_id'] = $company_info['id'];
+        $user_company['user_id'] = $user_info['id'];
+        $user_company['invite_code'] = $this->getCode($param['company_id'], $user_info['id']);
+
+        $user_company['company_name'] = $company_info['company_name'];
+        $user_company['creation_time'] = date("Y-m-d H:i:s");
+        $user_company['isAdministrator'] = 0;
+//        $user_company['type'] = $param['type'];
+//        $user_company['is_profession'] = $param['is_profession'];
+        $user_company['user_name'] = $user_info['userName'];
+
+        $relate_id = CompanyUserRelate::query()->insertGetId($user_company);
+        //留在完善信息（加入申请列表）
+//        AuthRoleRelate::insertGetId(['relate_id'=>$relate_id,'role_id'=>\config('company_service_role')]);
+        return $this->success('加入成功');
+
+    }
+
+//    /**
+//     * @Inject()
+//     * @var SessionInterface
+//     */
+//    private $session;
+    function switchCompany(RequestInterface $request)
+    {
+        $redis = RedisUtil::getInstance();
+        $param = $request->all();
+        $user_info = $request->user_info;
+        $company_id = empty($param['company_id']) ? 0 : $param['company_id'];
+//        $list = [0];
+        $company_list = CompanyUserRelate::query()->where(['user_id' => $user_info['id'], 'status' => 1])->pluck('company_id');
+//        if (!empty($company_list)) {
+//            $list = array_merge($list, $company_list->toArray());
+//        }
+        if ($company_id > 0) {
+            $company_info = UserCompany::where('id', $company_id)->first();
+            if ($company_info->level == 3) {
+                $redis->setKeys('level_userid_' . $user_info['id'], 3);
+
+            } else {
+                if ($company_info->expire_time < date("Y-m-d H:i:s")) {
+                    $redis->setKeys('level_userid_' . $user_info['id'], 0);
+                } else {
+                    $redis->setKeys('level_userid_' . $user_info['id'], $company_info->level);
+
+                }
+            }
+
+
+//            if ($company_info->is_time_limit < 1) {
+//                if ($company_info->expire_time < date("Y-m-d H:i:s")) {
+////                    return $this->error('已过期不可切换');
+//                }
+//            }
+        } else {
+            $redis->setKeys('level_userid_' . $user_info['id'], 0);
+
+        }
+        if (empty($company_list)) {
+            return $this->error('信息缺失');
+        }
+
+        $list = $company_list->toArray();
+        if (in_array($company_id, $list)) {
+            $redis->setKeys('switch_company_' . $user_info['id'], $company_id);
+        } else {
+            return $this->error('切换失败');
+        }
+        CompanyUserRelate::where(['user_id' => $user_info['id']])->update(['switch' => 0]);
+
+        CompanyUserRelate::where(['user_id' => $user_info['id'], 'company_id' => $company_id])->update(['switch' => 1]);
+        $rule_res = $this->roleService->getRoleRuleName($user_info['id'], $company_id);
+
+        return $this->success('切换成功');
+
+    }
+
+
+    /**
+     * 公司团队申请列表由平台审核
+     */
+
+    function companyApplyList(RequestInterface $request)
+    {
+        $param = $request->all();
+        $size = empty($param['size']) ? 10 : $param['size'];
+        $where = [];
+        if (!empty($param['username'])) {
+            $where['user_name'] = $param['username'];
+
+        }
+        $company_users = CompanyUserRelate::with('user')->join('user_company', 'user_company.id', '=', 'company_user_relate.company_id')->select('company_user_relate.id', 'user_company.company_name', 'company_user_relate.company_id', 'company_user_relate.creation_time', 'company_user_relate.isAdministrator', 'company_user_relate.user_id', 'company_user_relate.status', 'company_user_relate.remark', 'company_user_relate.switch', 'company_user_relate.is_profession', 'company_user_relate.form_user_id', 'company_user_relate.option_user_id', 'company_user_relate.invite_code', 'company_user_relate.user_name', 'company_user_relate.department_id', 'company_user_relate.department_name', 'user_company.is_time_limit', 'user_company.expire_time', 'user_company.apply_change', 'user_company.address')->where($where)->where(['isAdministrator' => 1])->orderByDesc('company_user_relate.id')->paginate($size, ["*"], 'current');
+        $company_users = json_decode(json_encode($company_users), true);
+        foreach ($company_users['data'] as $k => $v) {
+            $company_users['data'][$k]['level'] = UserCompany::where('id', $v['company_id'])->value('level');
+            if($v['apply_change']==1){
+                $apply_info = ApplyCompany::where('company_id',$v['company_id'])->first();
+                $company_users['data'][$k]['company_name'] =$apply_info->company_name;
+                $company_users['data'][$k]['address'] =$apply_info->address;
+
+            }
+        }
+        return $this->success('返回成功', $company_users);
+    }
+
+    /**
+     * 设置公司等级
+     */
+    function setLevel()
+    {
+
+        $param = $this->request->all();
+        $user_info = $this->request->user_info;
+
+
+        if (empty($param['company_id']) || empty($param['level'])) {
+            return $this->error('参数缺失');
+        }
+
+        if (!in_array($param['level'], [1, 2, 3])) {
+            return $this->error('参数错误');
+
+        }
+        $data['level'] = $param['level'];
+        UserCompany::where(['id' => $param['company_id']])->update($data);
+        return $this->success('操作成功');
+
+    }
+
+
+    /**
+     * 创建团队审核通过 type 1通过 2拒绝
+     */
+    function applySure(RequestInterface $request)
+    {
+        return $this->error('该功能已去除');
+//        $user_info = $request->user_info;
+//        $param = $request->all();
+//        if (empty($param['relate_id']) || empty($param['type'])) {
+//            return $this->error('参数缺失');
+//        }
+//
+//        CompanyUserRelate::query()->where('id', $param['relate_id'])->update(['status' => $param['type'], 'option_user_id' => $user_info['id']]);
+//        return $this->success();
+
+    }
+
+
+    function getInviteCode(RequestInterface $request)
+    {
+//        $roles = new RoleService();
+//        $roles->getRoleRuleName(5);
+        echo $uri = $request->path();
+        $this->getCode(1, 2);
+    }
+
+
+    function addTime()
+    {
+        $user_info = $this->request->user_info;
+        $param = $this->request->all();
+        if (empty($param['company_id']) || empty($param['day_num'])) {
+            return $this->error('参数缺失');
+        }
+        $time = UserCompany::where(['id' => $param['company_id']])->value('expire_time');
+        $param['day_num'] = ceil($param['day_num']);
+        if ($time > date("Y-m-d H:i:s")) {
+            UserCompany::where(['id' => $param['company_id']])->update(['expire_time' => date("Y-m-d H:i:s", strtotime("+" . $param['day_num'] . " day", strtotime($time)))]);
+
+        } else {
+            UserCompany::where(['id' => $param['company_id']])->update(['expire_time' => date("Y-m-d H:i:s", strtotime("+" . $param['day_num'] . " day"))]);
+
+        }
+        return $this->success('操作成功');
+
+
+    }
+
+    function info()
+    {
+        $company_id = $this->request->switch_company;
+        if (empty($company_id)) {
+            return $this->error('不支持修改');
+        }
+        $apply_info = ApplyCompany::where('company_id', $company_id)->first();
+
+        $info = UserCompany::where('id', $company_id)->first();
+        if (!empty($apply_info)) {
+            $info->address = $apply_info->address;
+            $info->company_name = $apply_info->company_name;
+        }
+        return $this->success('请求成功', $info);
+
+    }
+
+    function change()
+    {
+
+        $param = $this->request->all();
+        $company_id = $this->request->switch_company;
+
+        if (empty($param['address']) || empty($param['company_name'])) {
+            return $this->error('参数缺失');
+        }
+        $data['company_id'] = $company_id;
+        $data['address'] = $param['address'];
+        $data['company_name'] = $param['company_name'];
+        $ain = 0;
+        $cup = 0;
+        try {
+            Db::beginTransaction();
+            $company_apply = ApplyCompany::where('company_id',$company_id)->first();
+            if(empty($company_apply)){
+                $ain = ApplyCompany::insertGetId($data);
+
+            }else{
+                $ain = ApplyCompany::where('company_id',$company_id)->update($data);
+
+            }
+            $cup = UserCompany::where('id', $company_id)->update(['apply_change' => 1]);
+
+        } catch (\Exception $e) {
+            Db::rollBack();
+            return $this->error($e->getMessage());
+        }
+        if ($ain && $cup) {
+            Db::commit();
+        } else {
+            Db::rollBack();
+        }
+        return $this->success();
+
+
+    }
+
+
+    function infoAudit()
+    {
+        $param = $this->request->all();
+//        $company_id = ;
+
+        if (!isset($param['state']) || !isset($param['company_id'])) {
+            return $this->error('参数缺失');
+        }
+        $company_id = $param['company_id'];
+        $apply_info = ApplyCompany::where('company_id', $company_id)->first();
+        if(empty($apply_info)){
+            return  $this->error('参数缺失');
+        }
+        var_dump($apply_info);
+        if (!isset($param['state'])) {
+            $data = ['apply_change' => 0];
+        } else {
+            $data = ['apply_change' => 0, 'company_name' => $apply_info->company_name, 'address' => $apply_info->address];
+//            UserCompany::where('id',$company_id)->update(['apply_change'=>0,'company_name'=>$apply_info->company_name,'address'=>$apply_info->address]);
+//            ApplyCompany::where('company_id',$company_id)->delete();
+        }
+        $cre = 0;
+        $ares = 0;
+        try {
+            Db::beginTransaction();
+            $cre = UserCompany::where('id', $company_id)->update($data);
+
+            $ares = ApplyCompany::where('company_id', $company_id)->delete();
+        } catch (\Exception $e) {
+            Db::rollBack();
+            return $this->error($e->getMessage());
+        }
+
+
+        if ($cre && $ares) {
+            Db::commit();
+        } else {
+            Db::rollBack();
+        }
+
+        return $this->success();
+
+
+    }
+
+}

@@ -1,0 +1,208 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Middleware\Auth;
+
+use App\Common\Tool\RedisUtil;
+use App\Model\CompanyUserRelate;
+use App\Model\OptionLog;
+use App\Model\UserCompany;
+use Hyperf\HttpServer\Contract\RequestInterface;
+
+use App\Common\Tool\JwtTool;
+use Psr\Container\ContainerInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\RequestHandlerInterface;
+use Hyperf\HttpServer\Contract\ResponseInterface as HttpResponse;
+use Hyperf\Di\Annotation\Inject;
+use App\Service\RoleService;
+use App\Amqp\Producer\OptionLogProducer;
+use Hyperf\Amqp\Producer;
+
+
+class CheckToken implements MiddlewareInterface
+{
+
+    /**
+     * @Inject
+     * @var RoleService
+     */
+    protected $roleService;
+    /**
+     * @Inject()
+     * @var Producer
+     */
+    private $producer;
+
+    /**
+     * @var ContainerInterface
+     */
+    protected $container;
+    /**
+     * @var RequestInterface
+     */
+    protected $request_http;
+    /**
+     * @var RequestInterface
+     */
+    protected $request;
+
+    /**
+     * @var HttpResponse
+     */
+    protected $response;
+
+    public function __construct(ContainerInterface $container, HttpResponse $response, RequestInterface $request)
+    {
+        $this->container = $container;
+        $this->response = $response;
+        $this->request = $request;
+    }
+    public function judge_agent()
+    {
+
+        $headers = $this->request->getHeaders();
+        $ua = $headers['user-agent'][0] ;
+        if (strpos($ua, 'MicroMessenger')) {
+            return 1;
+        }
+        return 0;
+    }
+    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
+    {
+        $redis = RedisUtil::getInstance();
+        $agent_type = $this->judge_agent();
+        //
+//        $this->index2();
+//        $this->test();
+//        $ver = JwtTool::verifyToken("sad");
+//        $token = $request->header('access-token');
+        $access_token = $request->getHeader('Access-Token');
+        if (empty($access_token[0])) {
+            return $this->response->json(
+                [
+                    'code' => 108,
+                    'message' => '中间件验证token无效，阻止继续向下执行',
+                    'data' => [],
+                ]
+            );
+        }
+        $user_info = JwtTool::verifyToken($access_token[0]);
+        if ($user_info) {
+            $user_id = $user_info['id'];
+            if(empty($agent_type)){
+                $token_user_key = strval($user_id);
+            }else{
+                $token_user_key = "wechat-".$user_id;
+
+            }
+
+            $access_tokened = $redis->hashGet('access_token', $token_user_key);
+            if ($access_tokened != $access_token[0]) {
+                return $this->response->json(
+                    [
+                        'code' => 108,
+                        'message' => '中间件验证token无效，阻止继续向下执行',
+                        'data' => [],
+                    ]
+                );
+            }
+
+
+            $company_id = CompanyUserRelate::where(['switch' => 1, 'user_id' => $user_id])->value('company_id');
+            $switch_company = empty($company_id) ? 0 : $company_id;
+            if ($company_id > 0) {
+                $company_info = UserCompany::where('id', $company_id)->first();
+                if ($company_info->level == 3) {
+                    $redis->setKeys('level_userid_' . $user_info['id'], 3);
+
+                } else {
+//                    if ($company_info->is_time_limit < 1) {
+                    if ($company_info->expire_time < date("Y-m-d H:i:s")) {
+                        $redis->setKeys('level_userid_' . $user_info['id'], 0);
+
+//                        return $this->error('已过期不可切换');
+//                        CompanyUserRelate::where(['user_id'=>$user_id,'company_id'=>$company_id])->update(['switch'=>0]);
+//
+//                        CompanyUserRelate::where(['user_id'=>$user_id,'company_id'=>0])->update(['switch'=>1]);
+//                        $redis->setKeys('switch_company_' . $user_info['id'], 0);
+
+                    } else {
+                        $redis->setKeys('level_userid_' . $user_info['id'], $company_info->level);
+
+                    }
+//                    }
+                }
+
+            }
+
+
+//            echo 'rule_name_user'.$user_info['id'].'###$$###';
+            $user_info['userName'] = empty($user_info['userName'])?$user_info['phone']:$user_info['userName'];
+            $this->request->user_info = $user_info;
+            $this->request->switch_company = $switch_company;
+//            $this->request->user_type = CompanyUserRelate::where(['company_id'=>$switch_company,'user_id'=>$user_info['id']])->value('type');
+
+            $uri = $this->request->path();
+            $date['user_id'] = $this->request->user_info['id'];
+            $date['user_name'] = $this->request->user_info['userName'];
+            $date['method'] = $this->request->path();
+            $date['param'] = json_encode($this->request->all());
+            $str_me = explode('/', $date['method']);
+            $date['controller'] = $str_me[1];
+            $date['company_id'] = $company_id;
+//            OptionLog::insertGetId($date);
+            $this->producer->produce(new OptionLogProducer($date));
+
+            $redis = RedisUtil::getInstance();
+            $rule_all = $redis->getKeys('rule_all');
+            $rule_all = json_decode($rule_all, true);
+
+//            $rule_list = $redis->getKeys('rule_name_user' . $user_info['id']);
+            $rule_list_hash = $redis->hashGet('user_rule',strval($user_info['id']));
+            $rule_list_hash = unserialize($rule_list_hash);
+            if (in_array($uri, $rule_all)) {
+//                if (empty($rule_list)) {
+//                    $rule_list = [];
+//                    $this->roleService->getRoleRuleName($user_info['id']);
+//                    return $this->response->json(
+//                        [
+//                            'code' => 108,
+//                            'message' => '登陆超时',
+//                            'data' => [],
+//                        ]
+//                    );
+//                }
+//                var_dump(json_decode($rule_list));
+//                if (!in_array($uri, $rule_list)) {
+                if (!in_array($uri, $rule_list_hash)) {
+
+                    return $this->response->json(
+                        [
+                            'code' => -1,
+                            'message' => '没有该操作权限',
+                            'data' => [],
+                        ]
+                    );
+                }
+            }
+
+
+
+            return $handler->handle($request);
+        } else {
+            return $this->response->json(
+                [
+                    'code' => 108,
+                    'message' => '中间件验证token无效，阻止继续向下执行',
+                    'data' => [],
+                ]
+            );
+        }
+
+    }
+
+}
