@@ -1,54 +1,44 @@
-# Default Dockerfile
-#
-# @link     https://www.hyperf.io
-# @document https://hyperf.wiki
-# @contact  group@hyperf.io
-# @license  https://github.com/hyperf-cloud/hyperf/blob/master/LICENSE
+FROM php:7.4-fpm
 
-FROM hyperf/hyperf:7.4-alpine-v3.11-swoole
-LABEL maintainer="Hyperf Developers <group@hyperf.io>" version="1.0" license="MIT" app.name="Hyperf"
+# 安装依赖
+RUN apt-get update && apt-get install -y \
+    git \
+    libzip-dev \
+    unzip \
+    libpng-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    && docker-php-ext-configure gd \
+        --with-freetype \
+        --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+        pdo_mysql \
+        gd \
+        sockets \
+        zip \
+    && pecl install swoole-4.6.7 \
+    && docker-php-ext-enable swoole \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && rm -rf /var/lib/apt/lists/*
+# 安装 Composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-##
-# ---------- env settings ----------
-##
-# --build-arg timezone=Asia/Shanghai
-ARG timezone
+# 设置工作目录
+WORKDIR /var/www/app
 
-ENV TIMEZONE=${timezone:-"Asia/Shanghai"} \
-    APP_ENV=prod \
-    SCAN_CACHEABLE=(true)
+# 安装依赖
+COPY ./app/composer.json ./app/composer.lock ./
+RUN composer install --no-scripts --no-autoloader
 
-# update
-RUN set -ex \
-    # show php version and extensions
-    && php -v \
-    && php -m \
-    && php --ri swoole \
-    #  ---------- some config ----------
-    && cd /etc/php7 \
-    # - config PHP
-    && { \
-        echo "upload_max_filesize=128M"; \
-        echo "post_max_size=128M"; \
-        echo "memory_limit=1G"; \
-        echo "date.timezone=${TIMEZONE}"; \
-    } | tee conf.d/99_overrides.ini \
-    # - config timezone
-    && ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime \
-    && echo "${TIMEZONE}" > /etc/timezone \
-    # ---------- clear works ----------
-    && rm -rf /var/cache/apk/* /tmp/* /usr/share/man \
-    && echo -e "\033[42;37m Build Completed :).\033[0m\n"
+# 添加应用代码
+COPY . .
 
-WORKDIR /opt/www
+# 生成 Autoload 文件
+RUN composer dump-autoload --optimize
 
-# Composer Cache
-# COPY ./composer.* /opt/www/
-# RUN composer install --no-dev --no-scripts
-
-COPY . /opt/www
-RUN composer install --no-dev -o && php bin/hyperf.php
-
+# Expose port 9501
 EXPOSE 9501
 
-ENTRYPOINT ["php", "/opt/www/bin/hyperf.php", "start"]
+# 启动 Hyperf
+CMD ["php", "/var/www/app/bin/hyperf.php", "start"]
